@@ -126,7 +126,7 @@ def create_initial_csv_template():
     return pd.DataFrame(template_data)
 
 def parse_time(time_str):
-    """時間文字列を解析して時間数を返す（24時間を超える場合も対応）"""
+    """時間文字列を解析して分単位で返す（24時間を超える場合も対応）"""
     try:
         # 文字列から余分な文字を削除
         time_str = str(time_str).strip()
@@ -138,28 +138,47 @@ def parse_time(time_str):
             minutes = int(time_parts[1]) if len(time_parts) > 1 else 0
             seconds = int(time_parts[2]) if len(time_parts) > 2 else 0
             
-            # 時間数に変換（秒も考慮）
-            return hours + minutes / 60 + seconds / 3600
+            # 分単位に変換（秒も考慮して分に変換）
+            total_minutes = hours * 60 + minutes + seconds / 60
+            return total_minutes
         else:
-            return float(time_str)
+            # 数値の場合は時間として扱い、分に変換
+            return float(time_str) * 60
     except Exception as e:
         print(f"時間解析エラー: {time_str} - {e}")
         return 0
 
 def calculate_work_hours(start_time, end_time, break_time=0):
-    """勤務時間を計算（休憩時間を考慮）"""
-    start_hours = parse_time(start_time)
-    end_hours = parse_time(end_time)
+    """勤務時間を計算（休憩時間を考慮）- 分単位で正確に計算"""
+    start_minutes = parse_time(start_time)
+    end_minutes = parse_time(end_time)
     
     # 翌日にまたがる場合の処理
-    if end_hours < start_hours:
-        end_hours += 24
+    if end_minutes < start_minutes:
+        end_minutes += 24 * 60  # 24時間を分に変換
     
-    # 総勤務時間から休憩時間を引く
-    total_hours = end_hours - start_hours
-    actual_work_hours = total_hours - float(break_time)
+    # 総勤務時間から休憩時間を引く（分単位）
+    total_minutes = end_minutes - start_minutes
+    break_minutes = float(break_time) * 60  # 休憩時間を分に変換
+    actual_work_minutes = total_minutes - break_minutes
     
-    return max(0, actual_work_hours)  # 負の値にならないように
+    # 時間単位に変換して返す
+    return max(0, actual_work_minutes / 60)  # 負の値にならないように
+
+def format_time_display(hours):
+    """時間を「○時間○分」の形式で表示"""
+    total_minutes = int(hours * 60)
+    display_hours = total_minutes // 60
+    display_minutes = total_minutes % 60
+    
+    if display_minutes == 0:
+        return f"{display_hours}時間"
+    else:
+        return f"{display_hours}時間{display_minutes}分"
+
+def get_precise_hours(hours):
+    """正確な時間数を小数点第3位まで取得"""
+    return round(hours, 3)
 
 def calculate_salary(row):
     """給与計算メイン関数"""
@@ -194,8 +213,9 @@ def calculate_salary(row):
         '残業手当': int(overtime_allowance),
         '処遇改善加算手当': int(improvement_allowance),
         '日当': int(daily_total),
-        '勤務時間': round(work_hours, 1),
-        '休憩時間': round(float(break_time), 1)
+        '勤務時間': get_precise_hours(work_hours),
+        '休憩時間': round(float(break_time), 1),
+        '勤務時間表示': format_time_display(work_hours)
     }
 
 def format_currency(amount):
@@ -274,32 +294,35 @@ def main():
                             st.markdown(f"**{row['日勤 or 夜勤']}**")
                         with col4:
                             work_hours = row.get('勤務時間', calculate_work_hours(row['勤務開始時間'], row['勤務終了時間'], row.get('休憩時間', 0)))
-                            st.markdown(f"**実働時間: {work_hours:.1f}時間**")
+                            work_hours_display = row.get('勤務時間表示', format_time_display(work_hours))
+                            st.markdown(f"**実働時間: {work_hours_display}**")
                         
                         # 勤務時間詳細
                         break_time = row.get('休憩時間', 0)
                         total_time = calculate_work_hours(row['勤務開始時間'], row['勤務終了時間'], 0)  # 休憩時間を引かない総時間
                         work_date = row.get('日付', '日付不明')
                         st.markdown(f"📅 **勤務日:** {work_date}")
-                        st.markdown(f"🕐 **勤務時間:** {row['勤務開始時間']} ～ {row['勤務終了時間']} (総時間: {total_time:.1f}時間, 休憩: {break_time:.1f}時間, 実働: {work_hours:.1f}時間)")
+                        st.markdown(f"🕐 **勤務時間:** {row['勤務開始時間']} ～ {row['勤務終了時間']} (総時間: {format_time_display(total_time)}, 休憩: {break_time:.1f}時間, 実働: {work_hours_display})")
                         
                         # 計算式表示
                         work_hours = row.get('勤務時間', calculate_work_hours(row['勤務開始時間'], row['勤務終了時間'], row.get('休憩時間', 0)))
+                        work_hours_display = row.get('勤務時間表示', format_time_display(work_hours))
                         if row['日勤 or 夜勤'] == '日勤':
                             st.markdown(f"""
                             **📊 計算詳細:**
-                            - 基本給: {work_hours:.1f}時間 × ¥1,300 = {format_currency(row['基本給'])}
-                            - 処遇改善加算手当: {work_hours:.1f}時間 × ¥1,200 × {row['処遇改善加算％']}% = {format_currency(row['処遇改善加算手当'])}
+                            - 基本給: {work_hours_display} ({work_hours:.3f}時間) × ¥1,300 = {format_currency(row['基本給'])}
+                            - 処遇改善加算手当: {work_hours_display} ({work_hours:.3f}時間) × ¥1,200 × {row['処遇改善加算％']}% = {format_currency(row['処遇改善加算手当'])}
                             """)
                         else:
                             overtime_hours = max(0, work_hours - 8)
+                            overtime_display = format_time_display(overtime_hours)
                             st.markdown(f"""
                             **📊 計算詳細:**
-                            - 基本給: {work_hours:.1f}時間 × ¥1,200 = {format_currency(row['基本給'])}
+                            - 基本給: {work_hours_display} ({work_hours:.3f}時間) × ¥1,200 = {format_currency(row['基本給'])}
                             - 夜勤手当: 固定 = {format_currency(row['夜勤手当'])}
                             - 深夜手当: 固定 = {format_currency(row['深夜手当'])}
-                            - 残業手当: {overtime_hours:.1f}時間 × ¥1,200 × 25% = {format_currency(row['残業手当'])}
-                            - 処遇改善加算手当: {work_hours:.1f}時間 × ¥1,200 × {row['処遇改善加算％']}% = {format_currency(row['処遇改善加算手当'])}
+                            - 残業手当: {overtime_display} ({overtime_hours:.3f}時間) × ¥1,200 × 25% = {format_currency(row['残業手当'])}
+                            - 処遇改善加算手当: {work_hours_display} ({work_hours:.3f}時間) × ¥1,200 × {row['処遇改善加算％']}% = {format_currency(row['処遇改善加算手当'])}
                             """)
                         
                         # 手当詳細をメトリクス形式で表示
@@ -385,7 +408,7 @@ def main():
                                 '日付': record['日付'],
                                 '勤務形態': record['日勤 or 夜勤'],
                                 '勤務時間': f"{record['勤務開始時間']}～{record['勤務終了時間']}",
-                                '実働時間': f"{actual_work_hours:.1f}h",
+                                '実働時間': format_time_display(actual_work_hours),
                                 '休憩時間': f"{break_time:.1f}h",
                                 '日当': format_currency(record['日当'])
                             })
@@ -402,7 +425,7 @@ def main():
                         with col1:
                             st.metric("総勤務日数", f"{len(employee_records)}日")
                         with col2:
-                            st.metric("総実働時間", f"{total_work_hours:.1f}時間")
+                            st.metric("総実働時間", format_time_display(total_work_hours))
                         with col3:
                             st.metric("総支給額", format_currency(total_salary))
                         
@@ -434,9 +457,19 @@ def main():
                 unique_results = employee_groups
                 
                 # 集計データの計算
-                total_employees = len(unique_results)
-                day_shift_count = len(unique_results[unique_results['日勤 or 夜勤'] == '日勤'])
-                night_shift_count = len(unique_results[unique_results['日勤 or 夜勤'] == '夜勤'])
+                total_employees = len(unique_employees)  # ユニークな従業員数を使用
+                
+                # 勤務形態別の従業員数を正しく計算（勤務記録数ではなく従業員数）
+                day_shift_employees = set()
+                night_shift_employees = set()
+                for _, row in unique_results.iterrows():
+                    if row['日勤 or 夜勤'] == '日勤':
+                        day_shift_employees.add(row['従業員名'])
+                    else:
+                        night_shift_employees.add(row['従業員名'])
+                
+                day_shift_count = len(day_shift_employees)
+                night_shift_count = len(night_shift_employees)
                 
                 # 各手当の合計
                 total_basic = unique_results['基本給'].sum()
@@ -449,7 +482,12 @@ def main():
                 total_work_hours = 0
                 total_break_hours = 0
                 for index, row in unique_results.iterrows():
-                    work_hours = row.get('勤務時間', 0)
+                    # 実働時間を正しく計算
+                    work_hours = calculate_work_hours(
+                        row['勤務開始時間'],
+                        row['勤務終了時間'],
+                        row.get('休憩時間', 0)
+                    )
                     break_hours = row.get('休憩時間', 0)
                     total_work_hours += work_hours
                     total_break_hours += break_hours
@@ -466,7 +504,7 @@ def main():
                     st.metric("総従業員数", f"{total_employees}名")
                     st.metric("日勤", f"{day_shift_count}名")
                     st.metric("夜勤", f"{night_shift_count}名")
-                    st.metric("総実働時間", f"{total_work_hours:.1f}時間")
+                    st.metric("総実働時間", format_time_display(total_work_hours))
                     st.metric("総休憩時間", f"{total_break_hours:.1f}時間")
                 
                 with col2:
